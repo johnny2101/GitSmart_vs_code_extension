@@ -9,7 +9,12 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "*",
+    "onStartupFinished",
+    "onLanguage:git",
+    "workspaceContains:.git"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
