@@ -1,23 +1,24 @@
-import axios from "axios";
-import fs from "fs";
-import { Logger } from "../log/Logger";
 import { LLMGitHandler } from "./git_handler";
+import { BaseLLMHandler } from "./base_handler";
+import { GitService } from "../git/gitService";
 
 interface ChatMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "llm_git";
   content: string;
 }
 
-export class LLMUserHandler {
-  private static instance: LLMUserHandler;
-  private chatHistory: ChatMessage[] = [];
-  private logger: Logger = Logger.getInstance();
+export class LLMUserHandler extends BaseLLMHandler {
   private gitHandler = LLMGitHandler.getInstance();
 
   private constructor() {
-    this.chatHistory.push({
-      role: "system",
-      content: `You are an AI coordinator that manages communication between a user and a Git operations agent (llm_git). Your responsibilities are:
+    super();
+  }
+
+  protected initializeChatHistory(): void {
+    this.chatHistory = [
+      {
+        role: "system",
+        content: `You are an AI coordinator that manages communication between a user and a Git operations agent (llm_git). Your responsibilities are:
 
 1. Interpret the user's requests in natural language.
 2. Decide whether an action is needed from the user or from the Git operations model (llm_git).
@@ -46,80 +47,61 @@ In the next message, you will receive:
    - A message from the **user**, or
    - A response from **llm_git** (after performing an operation you requested).
 
-Your task will be to interpret the context and return one line only, in one of the following formats:
+Your task will be to interpret the context and return one line only, in one of the following formats and without any additional text:
 
 [user] ...
 [git] ...
 `,
-    });
+      },
+    ];
   }
 
   public static getInstance(): LLMUserHandler {
     if (!LLMUserHandler.instance) {
       LLMUserHandler.instance = new LLMUserHandler();
     }
-    return LLMUserHandler.instance;
+    return LLMUserHandler.instance as LLMUserHandler;
   }
 
-  public async handleMessage(
+  protected prepareMessages(
     userMessage: string,
     gitStatus: string
-  ): Promise<string> {
+  ): ChatMessage[] {
     const combinedMessage = `[user]: ${userMessage}\n[git status]: ${gitStatus}`;
-
     this.chatHistory.push({ role: "user", content: combinedMessage });
-
-    try {
-      const response = await axios.post("http://localhost:11434/api/chat", {
-        model: "gemma3:12b",
-        messages: this.chatHistory,
-        stream: false,
-      });
-
-      const assistantMessage =
-        response.data.message?.content || "(No response)";
-      this.logger.logResponse(assistantMessage, LLMUserHandler.name);
-
-      this.chatHistory.push({ role: "assistant", content: assistantMessage });
-
-      if (assistantMessage.startsWith("[git]")) {
-        const gitOperation = assistantMessage.replace("[git]", "").trim();
-        // this.logger.logResponse(
-        //   `Extracted Git status: ${gitStatus}`,
-        //   LLMUserHandler.name
-        // );
-        const action = await this.perfromGitOperation(gitOperation, gitStatus);
-        this.chatHistory.push({ role: "assistant", content: action });
-
-        return action;
-      }
-
-      return assistantMessage;
-    } catch (err) {
-      this.logger.logError(
-        `Error during request to LLM: ${err}`,
-        LLMUserHandler.name
-      );
-      return "Error: Unable to contact the LLM model.";
-    }
+    return this.chatHistory;
   }
 
-  public resetChat(): void {
-    this.chatHistory = [
-      {
-        role: "system",
-        content: `You are an AI coordinator that manages communication between a user and a Git operations agent (llm_git)...[etc.]`,
-      },
-    ];
+  protected async processResponse(
+    response: string,
+    gitStatus?: string
+  ): Promise<string> {
+    if (response.startsWith("[git]")) {
+      const gitDiff = await new GitService().getDiff();
+      const gitOperation = response.replace("[git]", "").trim();
+      const action = await this.perfromGitOperation(
+        gitOperation,
+        gitStatus || "",
+        gitDiff || ""
+      );
+      this.chatHistory.push({ role: "llm_git", content: action });
+      return action;
+    }
+    return response;
   }
 
   private async perfromGitOperation(
     gitOperation: string,
-    gitStatus: string
+    gitStatus: string,
+    gitDiff: string
   ): Promise<string> {
+    console.log("Performing Git operation:", gitOperation);
     const intent = await this.gitHandler.extractIntent(gitOperation, gitStatus);
-    const action = await this.gitHandler.getGitCommand(intent, gitOperation);
-
+    const action = await this.gitHandler.getGitCommand(
+      intent,
+      gitOperation,
+      gitStatus
+    );
     return action;
   }
 }
