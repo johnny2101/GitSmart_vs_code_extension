@@ -17,4 +17,16 @@ export class GitService {
       return "";
     }
   }
+
+  async getDiff(): Promise<string> {
+    try {
+      const diff = await this.git.diff();
+      return diff;
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        "Errore durante la lettura del diff Git. " + error
+      );
+      return "";
+    }
+  }
 }
